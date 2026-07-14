@@ -1,0 +1,263 @@
+data <- read.csv("C:\\Users\\aafer\\Downloads\\spotifydataset\\dataset.csv")
+length(unique(data$track_genre))
+
+genre_counts <- sort(table(data$track_genre), decreasing = TRUE)
+print(genre_counts[1:30])
+
+str(data$explicit)
+data$explicit <- as.logical(data$explicit)
+
+top_genres <- names(genre_counts)[1:30]
+top_df <- data[data$track_genre %in% top_genres, ]
+
+explicit_ratio_all <- aggregate(explicit ~ track_genre, data = data,
+                                FUN = function(x) round(mean(x) * 100, 1))
+explicit_ratio_all$dist_from_50 <- abs(explicit_ratio_all$explicit - 50)
+explicit_ratio_all[order(explicit_ratio_all$dist_from_50), ]
+
+set.seed(123)
+df_sample <- data[sample(nrow(data), 10000), ]
+
+selected_genres <- c("dancehall", "death-metal", "hip-hop", "funk", "soul", "latino")
+df_sub <- data[data$track_genre %in% selected_genres, ]
+
+summary(data$popularity)
+sd(data$popularity)
+
+summary(df_sub$popularity)
+sd(df_sub$popularity)
+
+boxplot(popularity ~ track_genre, data = df_sub,
+        main = "Popularity by Genre",
+        xlab = "Genre",
+        ylab = "Popularity",
+        col  = rainbow(6),
+        las  = 2)
+
+explicit_table <- aggregate(explicit ~ track_genre, data = df_sub,
+                            FUN = function(x) c(
+                              n_explicit   = sum(x),
+                              n_nonexplicit = sum(!x),
+                              pct_explicit = round(mean(x) * 100, 1)
+                            ))
+print(explicit_table)
+
+# Check zero popularity counts per genre
+zero_counts <- aggregate(popularity ~ track_genre, data = df_sub,
+                         FUN = function(x) sum(x == 0))
+print(zero_counts)
+
+# What percentage is that per genre?
+zero_pct <- aggregate(popularity ~ track_genre, data = df_sub,
+                      FUN = function(x) round(mean(x == 0) * 100, 1))
+print(zero_pct)
+
+selected_genres <- c("dancehall", "death-metal", "hip-hop", "funk", "latino")
+df_sub <- data[data$track_genre %in% selected_genres, ]
+
+# Remove zero popularity tracks
+df_sub <- df_sub[df_sub$popularity > 0, ]
+
+# Confirm counts
+table(df_sub$track_genre)
+
+audio_features <- c("danceability", "energy", "loudness",
+                    "valence", "acousticness", "speechiness", "tempo")
+
+# Summary statistics for each feature
+for (feat in audio_features) {
+  cat("\n---", feat, "---\n")
+  print(summary(data[[feat]]))
+  cat("SD:", round(sd(data[[feat]]), 3), "\n")
+}
+
+# Histograms for each audio feature
+par(mfrow = c(2, 4))  # arrange in a grid
+for (feat in audio_features) {
+  hist(data[[feat]],
+       main = feat,
+       xlab = feat,
+       col  = "steelblue",
+       breaks = 40)
+}
+par(mfrow = c(1, 1))  # reset layout
+
+# Correlation matrix among audio features + popularity
+cor_vars <- c("popularity", audio_features)
+cor_matrix <- round(cor(data[, cor_vars], use = "complete.obs"), 2)
+print(cor_matrix)
+
+# ============================================================
+# Method: Two-Way ANOVA
+# ============================================================
+
+selected_genres <- c("dancehall", "death-metal", "hip-hop", "funk", "latino")
+df_sub <- data[data$track_genre %in% selected_genres, ]
+
+# Remove zero popularity tracks
+df_sub <- df_sub[df_sub$popularity > 0, ]
+
+
+# Ensure correct types
+df_sub$explicit      <- as.factor(df_sub$explicit)
+df_sub$track_genre   <- as.factor(df_sub$track_genre)
+
+# ============================================================
+# ASSUMPTION CHECKING
+# ============================================================
+
+boxplot(popularity ~ explicit * track_genre, data = df_sub,
+        main = "Popularity by Genre and Explicit Status",
+        xlab = "",
+        ylab = "Popularity",B
+        col  = rep(c("lightblue", "tomato"), 5),
+        las  = 2,
+        cex.axis = 0.6)
+legend("topright", fill = c("lightblue", "tomato"),
+       legend = c("Non-Explicit", "Explicit"))
+
+# 2. Group sizes for each cell (genre x explicit combination)
+table(df_sub$track_genre, df_sub$explicit)
+
+# ============================================================
+# FIT TWO-WAY ANOVA MODEL
+# ============================================================
+
+# Interaction model: does the explicit effect depend on genre?
+model_q1 <- aov(popularity ~ track_genre * explicit, data = df_sub)
+summary(model_q1)
+
+# ============================================================
+# INTERACTION PLOT
+# ============================================================
+
+interaction.plot(x.factor  = df_sub$track_genre,
+                 trace.factor = df_sub$explicit,
+                 response  = df_sub$popularity,
+                 col       = c("steelblue", "tomato"),
+                 lwd       = 3,
+                 type      = "b",
+                 pch       = c(1, 2),
+                 main      = "Interaction Plot: Genre x Explicit Status",
+                 xlab      = "Genre",
+                 ylab      = "Mean Popularity",
+                 trace.label = "Explicit")
+
+# ============================================================
+# ASSUMPTION CHECKING
+# ============================================================
+
+# Normality of residuals
+qqnorm(model_q1$residuals,
+       main = "Q-Q Plot of Residuals (Q1 ANOVA)")
+qqline(model_q1$residuals, col = "red", lwd = 2)
+
+# ============================================================
+# POST-HOC ANALYSIS
+# ============================================================
+
+# Tukey HSD for pairwise comparisons
+tukey_q1 <- TukeyHSD(model_q1)
+
+# Genre main effect comparisons
+round(tukey_q1$track_genre, 3)
+
+# Explicit main effect
+round(tukey_q1$explicit, 3)
+
+# Interaction comparisons (genre:explicit combinations)
+round(tukey_q1$`track_genre:explicit`, 3)
+
+# ============================================================
+# Methods: Multinomial Logistic Regression + KNN
+# ============================================================
+
+library(nnet)
+library(class)
+
+# df_sub already filtered to 5 genres with zeros removed
+df_sub$track_genre <- as.factor(df_sub$track_genre)
+
+audio_features <- c("danceability", "energy", "loudness",
+                    "valence", "acousticness", "speechiness", "tempo")
+
+# ============================================================
+# TRAIN / TEST SPLIT (80/20)
+# ============================================================
+
+set.seed(123)
+train_idx <- sample(1:nrow(df_sub), size = round(0.8 * nrow(df_sub)))
+train     <- df_sub[train_idx, ]
+test      <- df_sub[-train_idx, ]
+
+# ============================================================
+# METHOD 1: MULTINOMIAL LOGISTIC REGRESSION
+# ============================================================
+
+# Fit full model then apply stepwise to identify important features
+# Baseline genre is determined alphabetically (dancehall)
+multi_full <- multinom(track_genre ~ danceability + energy + loudness +
+                         valence + acousticness + speechiness + tempo,
+                       data = train)
+
+multi_step <- step(multi_full)
+summary(multi_step)
+
+exp(coef(multi_step))
+
+multi_preds <- predict(multi_step, newdata = test, type = "class")
+
+# Confusion matrix and accuracy
+table(Predicted = multi_preds, Actual = test$track_genre)
+cat("Multinomial Accuracy:", round(mean(multi_preds == test$track_genre) * 100, 1), "%\n")
+
+# ============================================================
+# METHOD 2: KNN
+# ============================================================
+
+# Standardize features — necessary as predictors are on different scales
+train_scaled <- scale(train[, audio_features])
+test_scaled  <- scale(test[, audio_features],
+                      center = attr(train_scaled, "scaled:center"),
+                      scale  = attr(train_scaled, "scaled:scale"))
+
+# Try several values of k and compare accuracy
+k_vals   <- c(1, 3, 5, 10, 15, 20)
+knn_accs <- numeric(length(k_vals))
+
+for (i in seq_along(k_vals)) {
+  knn_preds    <- knn(train = train_scaled,
+                      test  = test_scaled,
+                      cl    = train$track_genre,
+                      k     = k_vals[i])
+  knn_accs[i] <- mean(knn_preds == test$track_genre)
+}
+
+# Plot accuracy vs k to select best k
+plot(k_vals, knn_accs * 100,
+     type = "b",
+     pch  = 19,
+     col  = "steelblue",
+     xlab = "K (Number of Neighbors)",
+     ylab = "Accuracy (%)",
+     main = "KNN Accuracy by K Value")
+
+# Best k
+best_k <- k_vals[which.max(knn_accs)]
+cat("Best K:", best_k, "\n")
+
+# Final KNN predictions and evaluation
+knn_final <- knn(train = train_scaled,
+                 test  = test_scaled,
+                 cl    = train$track_genre,
+                 k     = best_k)
+
+table(Predicted = knn_final, Actual = test$track_genre)
+cat("KNN Accuracy (k =", best_k, "):", round(max(knn_accs) * 100, 1), "%\n")
+
+# ============================================================
+# METHOD COMPARISON
+# ============================================================
+
+cat("Multinomial Accuracy:", round(mean(multi_preds == test$track_genre) * 100, 1), "%\n")
+cat("KNN Accuracy (k =", best_k, "):", round(max(knn_accs) * 100, 1), "%\n")
